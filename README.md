@@ -1,5 +1,9 @@
 # Momentum Desktop - 桌面版自控力提升工具 🖥️
 
+> [!IMPORTANT]
+> 上游仓库已提供桌面端实现，请优先使用上游桌面端版本：<https://github.com/KenXiao1/momentum>  
+> 本仓库的历史使命已完成，现已停止功能更新，仅保留归档。
+
 <p align="center">
   <img src="public/app-icon.png" alt="Momentum Logo" width="128" height="128">
 </p>
@@ -163,7 +167,7 @@ npm run lint
 
 ## 🤝 贡献指南
 
-欢迎为桌面版Momentum贡献代码！
+本仓库已完成历史使命并停止更新，不再接受新功能贡献。
 
 ### 贡献流程
 1. Fork本仓库
@@ -196,9 +200,7 @@ npm run lint
 
 ## 📞 支持与反馈
 
-- **问题报告**: [GitHub Issues](https://github.com/enshulv/momentum_desktop/issues)
-- **功能建议**: [GitHub Discussions](https://github.com/enshulv/momentum_desktop/discussions)
-- **文档问题**: 请直接提交PR或创建Issue
+如需持续维护与最新桌面端能力，请前往上游仓库：<https://github.com/KenXiao1/momentum>
 
 ---
 

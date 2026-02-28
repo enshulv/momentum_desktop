@@ -198,7 +198,7 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
           </div>
           <div>
             <span className="text-gray-500 dark:text-gray-400">许可证：</span>
-            <span className="text-gray-900 dark:text-white ml-2">MIT License</span>
+            <span className="text-gray-900 dark:text-white ml-2">GPL-3.0</span>
           </div>
           <div>
             <span className="text-gray-500 dark:text-gray-400">技术栈：</span>
