@@ -7,17 +7,12 @@ on:
         description: 'Delay before archiving (minutes)'
         required: false
         default: '60'
-      confirm_archive:
-        description: 'Type ARCHIVE to confirm'
-        required: true
-        default: ''
 
 permissions:
   contents: read
 
 jobs:
   archive:
-    if: github.actor == github.repository_owner
     runs-on: ubuntu-latest
     steps:
       - name: Validate delay
@@ -34,15 +29,6 @@ jobs:
             exit 1
           fi
           echo "delay=$DELAY" >> "$GITHUB_OUTPUT"
-
-      - name: Validate confirmation
-        shell: bash
-        run: |
-          CONFIRM='${{ github.event.inputs.confirm_archive }}'
-          if [ "$CONFIRM" != "ARCHIVE" ]; then
-            echo "confirm_archive must be exactly ARCHIVE" >&2
-            exit 1
-          fi
 
       - name: Wait before archiving
         shell: bash
