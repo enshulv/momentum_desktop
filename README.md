@@ -11,12 +11,16 @@
 
 ## 最新更新
 
-- 优化了自动化发布流程，现在只有在需要发布时才会进行构建
+- 小窗与置顶流程已完成（同窗口画中画模式）
+- RSIP 节点支持编辑并持久化
+- 撤回/前进与操作历史已接入（快捷键 + 全局右键菜单）
+- 修复删除后撤回导致回收箱残留的问题
+- 新增“更新后首次打开弹窗显示更新事项”（每版本仅一次）
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows-blue" alt="Platform Support">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/version-1.0.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="License">
+  <img src="https://img.shields.io/badge/version-1.2.6-orange" alt="Version">
 </p>
 
 ---
@@ -39,6 +43,7 @@
 - **🖥️ 原生桌面应用** - 基于Electron构建，支持Windows
 - **📱 系统托盘** - 支持后台运行，快速访问
 - **⚙️ 窗口控制** - 自定义最小化、最大化、关闭按钮
+- **🪟 小窗专注模式** - 一键进入小窗 + 可置顶 + 状态持久化
 
 ### 💾 数据管理
 - **🗂️ 本地文件存储** - 支持本地数据存储，无需依赖网络
@@ -54,6 +59,7 @@
 - **📦 自动检测更新** - 应用启动时自动检查新版本
 - **🔔 更新提醒** - 顶部通知栏显示可用更新
 - **⚡ 一键更新** - 用户确认后自动下载和安装
+- **📝 首次启动更新说明** - 升级后首次打开弹窗展示本次更新要点
 
 ---
 
@@ -74,7 +80,7 @@
 #### 构建步骤
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/momentum.git
+git clone https://github.com/enshulv/momentum_desktop.git
 cd momentum
 
 # 安装依赖
@@ -133,6 +139,7 @@ npm run lint
 2. **用户提示**: 发现新版本时在界面顶部显示通知
 3. **确认下载**: 用户点击后显示更新确认对话框
 4. **自动安装**: 下载完成后提示重启应用
+5. **更新说明弹窗**: 新版本首次启动展示更新事项（本地记录已读版本）
 
 更新检查基于 [Electron官方文档](https://www.electronjs.org/zh/docs/latest/tutorial/updates) 实现。
 
