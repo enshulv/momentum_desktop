@@ -1,0 +1,50 @@
+name: Archive Repository (Delayed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      delay_minutes:
+        description: 'Delay before archiving (minutes)'
+        required: false
+        default: '60'
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate delay
+        id: validate
+        shell: bash
+        run: |
+          DELAY='${{ github.event.inputs.delay_minutes || '60' }}'
+          if ! [[ "$DELAY" =~ ^[0-9]+$ ]]; then
+            echo "delay_minutes must be a positive integer" >&2
+            exit 1
+          fi
+          if [ "$DELAY" -lt 1 ] || [ "$DELAY" -gt 360 ]; then
+            echo "delay_minutes must be between 1 and 360" >&2
+            exit 1
+          fi
+          echo "delay=$DELAY" >> "$GITHUB_OUTPUT"
+
+      - name: Wait before archiving
+        shell: bash
+        run: |
+          DELAY='${{ steps.validate.outputs.delay }}'
+          echo "Waiting ${DELAY} minute(s) before archiving..."
+          sleep "$((DELAY * 60))"
+
+      - name: Archive repository
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ARCHIVE_REPO_TOKEN != '' && secrets.ARCHIVE_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            await github.request('PATCH /repos/{owner}/{repo}', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              archived: true
+            });
+            core.info(`Archived ${context.repo.owner}/${context.repo.repo}`);
