@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ActiveSession, Chain, ExceptionRule, ExceptionRuleType, SessionContext, PauseOptions } from '../types';
-import { CheckCircle, Settings, Maximize, X, AlertTriangle } from 'lucide-react';
+import { CheckCircle, Settings, Maximize, X, AlertTriangle, PictureInPicture, Play, Pause, Pin, PinOff } from 'lucide-react';
 import { formatDuration, formatElapsedTime, formatTimeDescription, formatLastCompletionReference } from '../utils/time';
 import { notificationManager } from '../utils/notifications';
 import { forwardTimerManager } from '../utils/forwardTimer';
@@ -23,6 +23,8 @@ interface FocusModeProps {
   onPause: (duration?: number) => void;
   onResume: () => void;
   onRuleUsed?: (rule: ExceptionRule, actionType: 'pause' | 'early_completion', pauseOptions?: PauseOptions) => void;
+  isMiniMode?: boolean;
+  onMiniModeChange?: (isMini: boolean) => void;
 }
 
 export const FocusMode: React.FC<FocusModeProps> = ({
@@ -34,6 +36,8 @@ export const FocusMode: React.FC<FocusModeProps> = ({
   onPause,
   onResume,
   onRuleUsed,
+  isMiniMode: propIsMiniMode = false,
+  onMiniModeChange,
 }) => {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [hasShownWarning, setHasShownWarning] = useState(false);
@@ -50,8 +54,8 @@ export const FocusMode: React.FC<FocusModeProps> = ({
   // 暂停后自动恢复
   const AUTO_RESUME_STORAGE_KEY = 'momentum_auto_resume';
   const [autoResumeAt, setAutoResumeAt] = useState<number | null>(null);
-  const [resumeCountdown, setResumeCountdown] = useState<number>(0);
-  const [elapsedPauseTime, setElapsedPauseTime] = useState<number>(0);
+  const [resumeCountdown, setResumeCountdown] = useState(0);
+  const [elapsedPauseTime, setElapsedPauseTime] = useState(0);
   const resumeTimeoutRef = useRef<number | null>(null);
   
   // 正向计时相关状态
@@ -64,6 +68,15 @@ export const FocusMode: React.FC<FocusModeProps> = ({
   
   // 全屏模式状态
   const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  // 使用来自 props 的画中画模式状态
+  const isMiniMode = propIsMiniMode;
+  const setIsMiniMode = useCallback((isMini: boolean) => {
+    onMiniModeChange?.(isMini);
+  }, [onMiniModeChange]);
+  
+  // 置顶状态
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(true);
 
   const isDurationless = !!chain.isDurationless || session.duration === 0;
 
@@ -151,6 +164,14 @@ export const FocusMode: React.FC<FocusModeProps> = ({
         notificationManager.notifyTaskWarning(chain.name, `${minutes}分钟`);
       }
 
+      // 计时结束前 3 秒，自动返回大窗口
+      if (remaining <= 3 && remaining > 0) {
+        setIsMiniMode(false);
+        if (window.electron?.ipcRenderer?.send) {
+          window.electron.ipcRenderer.send('window:exit-mini-mode');
+        }
+      }
+
       if (remaining <= 0) {
         setShowCompletionDialog(true);
       }
@@ -159,7 +180,7 @@ export const FocusMode: React.FC<FocusModeProps> = ({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [session, onComplete, hasShownWarning, chain.name, isDurationless]);
+  }, [session, onComplete, hasShownWarning, chain.name, isDurationless, setIsMiniMode]);
 
   // 重置警告状态当会话改变时
   useEffect(() => { 
@@ -189,6 +210,35 @@ export const FocusMode: React.FC<FocusModeProps> = ({
   const handleInterruptClick = () => {
     setShowInterruptDialog(true);
   };
+  
+  // 处理切换置顶状态
+  const handleToggleAlwaysOnTop = useCallback((e) => {
+    e.stopPropagation();
+    const newState = !isAlwaysOnTop;
+    setIsAlwaysOnTop(newState);
+    // 通过 IPC 切换置顶状态
+    if (window.electron?.ipcRenderer?.send) {
+      window.electron.ipcRenderer.send('window:toggle-always-on-top', newState);
+    }
+  }, [isAlwaysOnTop]);
+
+  // 处理切换到画中画模式
+  const handleSwitchToMiniWindow = useCallback(() => {
+    setIsMiniMode(true);
+    // 通过 IPC 调整窗口大小和样式
+    if (window.electron?.ipcRenderer?.send) {
+      window.electron.ipcRenderer.send('window:enter-mini-mode');
+    }
+  }, [setIsMiniMode]);
+
+  // 处理从画中画模式恢复
+  const handleExitMiniWindow = useCallback(() => {
+    setIsMiniMode(false);
+    // 通过 IPC 恢复窗口大小和样式
+    if (window.electron?.ipcRenderer?.send) {
+      window.electron.ipcRenderer.send('window:exit-mini-mode');
+    }
+  }, [setIsMiniMode]);
 
   // 处理确认中断
   const handleConfirmInterrupt = () => {
@@ -619,6 +669,127 @@ export const FocusMode: React.FC<FocusModeProps> = ({
     };
   }, [isFullscreen, toggleFullscreen]);
 
+  // 画中画模式下的时间格式化
+  const formatMiniTime = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  if (isMiniMode) {
+    // 画中画模式渲染
+    return (
+      <div className="fixed inset-0 bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-[#161615] dark:via-black dark:to-[#161615] overflow-hidden electron-drag">
+        {/* Background Effects - 与大窗口风格一致 */}
+        <div className="absolute inset-0 bg-gradient-to-br from-primary-500/5 via-transparent to-primary-500/5 dark:from-primary-500/5 dark:via-transparent dark:to-primary-500/5 pointer-events-none"></div>
+        <div className="absolute top-1/4 left-1/4 w-24 h-24 bg-primary-500/10 dark:bg-primary-500/10 rounded-full blur-2xl animate-pulse-slow pointer-events-none"></div>
+        
+        {/* 置顶按钮 - 右上角 */}
+        <div className="absolute top-2 right-2 z-20 electron-no-drag">
+          <button
+            onClick={handleToggleAlwaysOnTop}
+            className="p-2 rounded-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 shadow-lg transition-all"
+            title={isAlwaysOnTop ? "取消置顶" : "置顶"}
+          >
+            {isAlwaysOnTop ? <Pin size={16} fill="currentColor" /> : <PinOff size={16} />}
+          </button>
+        </div>
+        
+        {/* 内容区域 - 使用 absolute 定位居中 */}
+        <div className="absolute inset-0 flex items-center justify-center z-10">
+          <div className="flex flex-col items-center justify-center px-4 py-4">
+            {/* 任务名称 */}
+            <div className="mb-4">
+              <p className="text-sm text-gray-500 dark:text-gray-400 font-chinese truncate max-w-[200px] text-center">
+                {chain.name}
+              </p>
+            </div>
+            
+            {/* 倒计时显示 - 与大窗口风格一致 */}
+            <div className="mb-6">
+              {isDurationless ? (
+                <div className="text-center">
+                  <div className="text-5xl md:text-6xl font-mono font-light text-gray-900 dark:text-white tracking-wider">
+                    {formatMiniTime(forwardElapsedSeconds)}
+                  </div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400 mt-2 font-chinese">
+                    已用时
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <div
+                    className={`text-5xl md:text-6xl font-mono font-light tracking-wider transition-colors ${
+                      timeRemaining <= 60 && timeRemaining > 0
+                        ? 'text-red-500 dark:text-red-400'
+                        : 'text-gray-900 dark:text-white'
+                    }`}
+                  >
+                    {formatMiniTime(timeRemaining)}
+                  </div>
+                  {session.isPaused && (
+                    <div className="text-sm text-amber-500 dark:text-amber-400 font-medium mt-2 font-chinese">
+                      已暂停
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            {/* 进度条 - 与大窗口风格一致 */}
+            {!isDurationless && (
+              <div className="w-full max-w-[200px] mb-6">
+                <div className="w-full h-3 bg-gray-200 dark:bg-white/10 backdrop-blur-sm rounded-full mx-auto border border-gray-300 dark:border-white/20">
+                  <div 
+                    className="h-full bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-1000 ease-out shadow-lg"
+                    style={{ width: `${progress}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+            
+            {/* 控制按钮区域 */}
+            <div className="flex items-center justify-center space-x-4 electron-no-drag">
+              {/* 暂停/继续按钮 */}
+              {!isDurationless && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    session.isPaused ? onResume() : onPause();
+                  }}
+                  className={`flex items-center justify-center w-12 h-12 rounded-full transition-all shadow-lg cursor-pointer electron-no-drag ${
+                    session.isPaused
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-yellow-500/90 hover:bg-yellow-500 text-white'
+                  }`}
+                >
+                  {session.isPaused ? <Play size={20} fill="currentColor" /> : <Pause size={20} fill="currentColor" />}
+                </button>
+              )}
+              
+              {/* 恢复大窗口按钮 - 带文字 */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExitMiniWindow();
+                }}
+                className="px-6 py-3 rounded-xl bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-chinese text-base font-medium transition-all shadow-lg cursor-pointer electron-no-drag"
+              >
+                恢复
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 普通模式渲染
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-[#161615] dark:via-black dark:to-[#161615] flex items-center justify-center relative overflow-hidden">
       {/* Fullscreen Controls */}
@@ -646,7 +817,7 @@ export const FocusMode: React.FC<FocusModeProps> = ({
       <div className="absolute inset-0 bg-gradient-to-br from-primary-500/5 via-transparent to-primary-500/5 dark:from-primary-500/5 dark:via-transparent dark:to-primary-500/5"></div>
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary-500/10 dark:bg-primary-500/10 rounded-full blur-3xl animate-pulse-slow"></div>
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary-500/5 dark:bg-primary-500/5 rounded-full blur-3xl animate-pulse-slow" style={{ animationDelay: '1s' }}></div>
-      
+       
       {/* Main content */}
       <div className="relative z-10 text-center animate-fade-in">
         <div className="mb-12">
@@ -812,11 +983,18 @@ export const FocusMode: React.FC<FocusModeProps> = ({
             </div>
           </div>
         )}
-      </div>
+       </div>
 
       {/* Red Interrupt Button - Bottom Right Corner */}
       {!session.isPaused && (
-        <div className="fixed bottom-6 right-6 z-30">
+        <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-2 items-end">
+          <button
+            onClick={handleSwitchToMiniWindow}
+            className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+            title="切换到小窗口"
+          >
+            <PictureInPicture size={20} />
+          </button>
           <button
             onClick={handleInterruptClick}
             className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 flex items-center justify-center border-2 border-red-400"

@@ -25,12 +25,108 @@ let autoCheckEnabled = false; // 默认关闭自动检查，等待渲染进程�
 // 保持对主窗口和系统托盘的全局引用
 let mainWindow;
 let tray = null;
+let mainWindowBounds = null; // 主窗口原始大小和位置
+let isMiniMode = false; // 画中画模式标志
 
-function createWindow() {
+// 保存窗口状态到文件
+async function saveWindowState(isMini, bounds, isAlwaysOnTop) {
+  try {
+    const userDataPath = app.getPath('userData');
+    const statePath = path.join(userDataPath, 'window-state.json');
+    
+    // 先尝试加载现有状态
+    let allState = {
+      normalBounds: null,
+      miniBounds: null,
+      lastMode: isMini ? 'mini' : 'normal',
+      isAlwaysOnTop: true, // 默认置顶
+      timestamp: Date.now()
+    };
+    
+    try {
+      const existingData = await fs.readFile(statePath, 'utf8');
+      if (existingData) {
+        allState = JSON.parse(existingData);
+      }
+    } catch (e) {
+      // 文件不存在或读取失败，使用默认值
+      console.log('窗口状态文件不存在或读取失败，使用默认值');
+    }
+    
+    // 更新当前模式的状态
+    const currentBounds = bounds || (mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null);
+    if (isMini) {
+      allState.miniBounds = currentBounds;
+      allState.lastMode = 'mini';
+      if (isAlwaysOnTop !== undefined) {
+        allState.isAlwaysOnTop = isAlwaysOnTop;
+      }
+    } else {
+      allState.normalBounds = currentBounds;
+      allState.lastMode = 'normal';
+    }
+    allState.timestamp = Date.now();
+    
+    // 保存所有状态
+    await fs.writeFile(statePath, JSON.stringify(allState, null, 2));
+    console.log('✅ 窗口状态已保存:', { isMini, bounds: currentBounds, isAlwaysOnTop: allState.isAlwaysOnTop });
+  } catch (error) {
+    console.error('❌ 保存窗口状态失败:', error);
+  }
+}
+
+// 从文件加载窗口状态
+async function loadWindowState() {
+  try {
+    const userDataPath = app.getPath('userData');
+    const statePath = path.join(userDataPath, 'window-state.json');
+    
+    try {
+      const data = await fs.readFile(statePath, 'utf8');
+      if (!data) {
+        console.log('窗口状态文件为空');
+        return {
+          normalBounds: null,
+          miniBounds: null,
+          lastMode: 'normal',
+          isAlwaysOnTop: true
+        };
+      }
+      
+      const state = JSON.parse(data);
+      console.log('✅ 窗口状态已加载:', state);
+      return state;
+    } catch (error) {
+      console.log('窗口状态文件不存在或读取失败:', error.message);
+      return {
+        normalBounds: null,
+        miniBounds: null,
+        lastMode: 'normal',
+        isAlwaysOnTop: true
+      };
+    }
+  } catch (error) {
+    console.error('❌ 加载窗口状态失败:', error);
+    return {
+      normalBounds: null,
+      miniBounds: null,
+      lastMode: 'normal',
+      isAlwaysOnTop: true
+    };
+  }
+}
+
+async function createWindow() {
   // 创建浏览器窗口
-  mainWindow = new BrowserWindow({
-    width: 1500,  // 设置默认宽度
-    height: 920,  // 设置默认高度
+  const defaultWidth = 1500;
+  const defaultHeight = 920;
+  
+  // 加载保存的窗口状态
+  const savedState = await loadWindowState();
+  
+  let windowOptions = {
+    width: defaultWidth,
+    height: defaultHeight,
     frame: false, // 无边框窗口
     icon: path.join(__dirname, '../public/app-icon.ico'), // 窗口图标
     titleBarStyle: 'hiddenInset', // 隐藏标题栏但保留窗口控制按钮
@@ -41,8 +137,18 @@ function createWindow() {
       contextIsolation: true,
       enableRemoteModule: false,
     },
-  });
-
+  };
+  
+  // 如果有保存的大窗口状态，使用保存的位置和大小
+  if (savedState.normalBounds) {
+    windowOptions.x = savedState.normalBounds.x;
+    windowOptions.y = savedState.normalBounds.y;
+    windowOptions.width = savedState.normalBounds.width;
+    windowOptions.height = savedState.normalBounds.height;
+  }
+  
+  mainWindow = new BrowserWindow(windowOptions);
+  
   // 判断是否处于开发模式
   const isDev = process.env.NODE_ENV === 'development';
   
@@ -65,6 +171,8 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!app.isQuiting) {
       event.preventDefault();
+      // 保存窗口状态
+      saveWindowState(isMiniMode);
       mainWindow.hide();
     }
   });
@@ -72,6 +180,18 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // 监听窗口移动和大小变化，自动保存状态
+  let resizeTimeout;
+  const saveWindowStateDebounced = () => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      saveWindowState(isMiniMode);
+    }, 500); // 500ms 防抖
+  };
+  
+  mainWindow.on('resize', saveWindowStateDebounced);
+  mainWindow.on('move', saveWindowStateDebounced);
 
   // 将窗口状态变化通知渲染进程（用于切换最大化图标等）
   mainWindow.on('maximize', () => {
@@ -385,8 +505,8 @@ function isNewerVersion(latest, current) {
 }
 
 // 当Electron完成初始化并准备创建浏览器窗口时调用
-app.on('ready', () => {
-  createWindow();
+app.on('ready', async () => {
+  await createWindow();
   createTray();
   
   // 配置自动更新
@@ -467,6 +587,111 @@ ipcMain.on('window:hide-to-tray', () => {
 ipcMain.on('window:query-state', (event) => {
   if (mainWindow) {
     event.sender.send('window:state', { isMaximized: mainWindow.isMaximized() });
+  }
+});
+
+// ========== 画中画模式相关 IPC ==========
+
+// 切换置顶状态
+ipcMain.on('window:toggle-always-on-top', async (event, isOnTop) => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('🟢 切换置顶状态:', isOnTop);
+      mainWindow.setAlwaysOnTop(isOnTop);
+      // 保存状态
+      const currentBounds = mainWindow.getBounds();
+      await saveWindowState(isMiniMode, currentBounds, isOnTop);
+    }
+  } catch (error) {
+    console.error('❌ 切换置顶状态失败:', error);
+  }
+});
+
+// 进入画中画模式
+ipcMain.on('window:enter-mini-mode', async () => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('🟢 进入画中画模式');
+      
+      // 保存主窗口原始位置和大小（只保存到内存，不保存到文件）
+      mainWindowBounds = mainWindow.getBounds();
+      console.log('当前大窗口状态:', mainWindowBounds);
+      
+      isMiniMode = true;
+      
+      // 加载保存的所有窗口状态
+      const savedState = await loadWindowState();
+      console.log('加载到的保存状态:', savedState);
+      
+      let miniWidth = 240;
+      let miniHeight = 180;
+      let x, y;
+      
+      // 如果有保存的小窗口状态，使用保存的
+      if (savedState.miniBounds) {
+        x = savedState.miniBounds.x;
+        y = savedState.miniBounds.y;
+        miniWidth = savedState.miniBounds.width;
+        miniHeight = savedState.miniBounds.height;
+        console.log('✅ 使用保存的小窗口状态:', { x, y, width: miniWidth, height: miniHeight });
+      } else {
+        // 否则计算右下角位置
+        x = mainWindowBounds.x + mainWindowBounds.width - miniWidth - 20;
+        y = mainWindowBounds.y + 20;
+        console.log('使用默认小窗口状态:', { x, y, width: miniWidth, height: miniHeight });
+      }
+      
+      // 设置窗口为画中画大小
+      mainWindow.setBounds({
+        x,
+        y,
+        width: miniWidth,
+        height: miniHeight
+      });
+      
+      // 设置窗口置顶状态
+      const shouldBeOnTop = savedState.isAlwaysOnTop !== undefined ? savedState.isAlwaysOnTop : true;
+      mainWindow.setAlwaysOnTop(shouldBeOnTop);
+      console.log('置顶状态:', shouldBeOnTop);
+      
+      console.log('✅ 已进入画中画模式');
+      console.log('当前窗口实际大小:', mainWindow.getBounds());
+    }
+  } catch (error) {
+    console.error('❌ 进入画中画模式失败:', error);
+  }
+});
+
+// 退出画中画模式
+ipcMain.on('window:exit-mini-mode', async () => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindowBounds) {
+      console.log('🟢 退出画中画模式');
+      
+      // 先保存当前小窗口的状态到文件
+      const currentMiniBounds = mainWindow.getBounds();
+      const isOnTop = mainWindow.isAlwaysOnTop();
+      console.log('当前小窗口状态:', currentMiniBounds, '置顶:', isOnTop);
+      await saveWindowState(true, currentMiniBounds, isOnTop);
+      
+      // 恢复主窗口原始大小和位置
+      console.log('恢复大窗口状态:', mainWindowBounds);
+      mainWindow.setBounds(mainWindowBounds);
+      
+      // 取消置顶
+      mainWindow.setAlwaysOnTop(false);
+      
+      isMiniMode = false;
+      
+      // 保存大窗口的状态到文件
+      await saveWindowState(false, mainWindowBounds, false);
+      
+      mainWindowBounds = null;
+      
+      console.log('✅ 已退出画中画模式');
+    }
+  } catch (error) {
+    console.error('❌ 退出画中画模式失败:', error);
   }
 });
 

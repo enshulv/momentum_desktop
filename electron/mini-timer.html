@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mini Timer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+      overflow: hidden;
+      -webkit-app-region: no-drag;
+    }
+    .drag-region {
+      -webkit-app-region: drag;
+    }
+    .no-drag {
+      -webkit-app-region: no-drag;
+    }
+  </style>
+</head>
+<body class="bg-transparent">
+  <div id="app" class="w-full h-full">
+    <div class="w-full h-full flex flex-col bg-white/95 dark:bg-gray-900/95 backdrop-blur-lg rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+      <!-- 顶部栏 - 可拖动区域 -->
+      <div class="drag-region flex items-center justify-between px-3 py-2 bg-gray-50/80 dark:bg-gray-800/80 border-b border-gray-100 dark:border-gray-700">
+        <span id="chainName" class="text-xs font-medium text-gray-500 dark:text-gray-400 truncate flex-1 mr-2">
+          任务名称
+        </span>
+        <div class="no-drag flex items-center space-x-1">
+          <button id="toggleAlwaysOnTopBtn" class="p-1 rounded transition-colors hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500" title="置顶窗口">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600 dark:text-blue-400">
+              <polyline points="8 3 21 3 21 17"></polyline>
+              <polyline points="23 21 16 14"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+            </svg>
+          </button>
+          <button id="restoreBtn" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500 transition-colors" title="恢复大窗口">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 3v3a2 2 0 0 1-2 2H3"></path>
+              <path d="M21 8h-3a2 2 0 0 1-2-2V3"></path>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+            </svg>
+          </button>
+          <button id="closeBtn" class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors" title="关闭">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 倒计时显示区域 -->
+      <div class="px-4 py-6 text-center">
+        <div class="space-y-1">
+          <div id="timerDisplay" class="text-4xl font-bold text-gray-800 dark:text-gray-100 font-mono tracking-tight">
+            00:00
+          </div>
+          <div id="statusDisplay" class="text-xs text-gray-400 dark:text-gray-500">
+            正在进行中
+          </div>
+        </div>
+      </div>
+
+      <!-- 进度条 -->
+      <div id="progressContainer" class="px-4 pb-4 hidden">
+        <div class="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+          <div id="progressBar" class="h-full bg-blue-500 dark:bg-blue-400 rounded-full transition-all duration-1000 ease-linear" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- 控制按钮 -->
+      <div class="no-drag px-4 pb-4">
+        <div class="flex items-center justify-center space-x-3">
+          <button id="togglePauseBtn" class="no-drag flex items-center justify-center w-12 h-12 rounded-full transition-all bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/30 hidden">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    let state = {
+      chainName: '',
+      timeRemaining: 0,
+      isPaused: false,
+      progress: 0,
+      isDurationless: false,
+      elapsedSeconds: 0,
+      isAlwaysOnTop: true
+    };
+
+    const formatTime = (seconds) => {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = seconds % 60;
+      
+      if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+      return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const updateUI = () => {
+      console.log('Updating UI with state:', state);
+      document.getElementById('chainName').textContent = state.chainName || '任务名称';
+      
+      const displaySeconds = state.isDurationless ? state.elapsedSeconds : state.timeRemaining;
+      document.getElementById('timerDisplay').textContent = formatTime(displaySeconds);
+      
+      if (state.isDurationless) {
+        document.getElementById('statusDisplay').textContent = '正在进行中';
+      } else {
+        if (state.isPaused) {
+          document.getElementById('statusDisplay').textContent = '已暂停';
+          document.getElementById('statusDisplay').className = 'text-xs text-amber-500 font-medium';
+        } else {
+          document.getElementById('statusDisplay').textContent = '';
+        }
+      }
+
+      // 进度条
+      const progressContainer = document.getElementById('progressContainer');
+      const progressBar = document.getElementById('progressBar');
+      if (!state.isDurationless) {
+        progressContainer.classList.remove('hidden');
+        progressBar.style.width = `${state.progress}%`;
+        
+        if (state.timeRemaining <= 60 && state.timeRemaining > 0) {
+          document.getElementById('timerDisplay').className = 'text-4xl font-bold font-mono tracking-tight text-red-500';
+        } else {
+          document.getElementById('timerDisplay').className = 'text-4xl font-bold font-mono tracking-tight text-gray-800 dark:text-gray-100';
+        }
+      } else {
+        progressContainer.classList.add('hidden');
+      }
+
+      // 暂停/播放按钮
+      const togglePauseBtn = document.getElementById('togglePauseBtn');
+      if (!state.isDurationless) {
+        togglePauseBtn.classList.remove('hidden');
+        if (state.isPaused) {
+          togglePauseBtn.className = 'no-drag flex items-center justify-center w-12 h-12 rounded-full transition-all bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/30';
+          togglePauseBtn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+          `;
+        } else {
+          togglePauseBtn.className = 'no-drag flex items-center justify-center w-12 h-12 rounded-full transition-all bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/30';
+          togglePauseBtn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+          `;
+        }
+      } else {
+        togglePauseBtn.classList.add('hidden');
+      }
+
+      // 置顶按钮状态
+      const toggleAlwaysOnTopBtn = document.getElementById('toggleAlwaysOnTopBtn');
+      if (state.isAlwaysOnTop) {
+        toggleAlwaysOnTopBtn.className = 'p-1 rounded transition-colors bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400';
+      } else {
+        toggleAlwaysOnTopBtn.className = 'p-1 rounded transition-colors hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500';
+      }
+    };
+
+    // 监听状态更新
+    ipcRenderer.on('mini-timer:update-state', (event, newState) => {
+      console.log('Received state update:', newState);
+      state = { ...state, ...newState };
+      updateUI();
+    });
+
+    // 按钮事件
+    document.getElementById('toggleAlwaysOnTopBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Toggle always on top clicked');
+      state.isAlwaysOnTop = !state.isAlwaysOnTop;
+      ipcRenderer.send('mini-timer:set-always-on-top', state.isAlwaysOnTop);
+      updateUI();
+    });
+
+    document.getElementById('restoreBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Restore button clicked');
+      ipcRenderer.send('mini-timer:restore');
+    });
+
+    document.getElementById('closeBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Close button clicked');
+      ipcRenderer.send('mini-timer:close');
+    });
+
+    document.getElementById('togglePauseBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('Toggle pause clicked');
+      ipcRenderer.send('mini-timer:toggle-pause');
+    });
+
+    console.log('Mini timer window loaded');
+  </script>
+</body>
+</html>

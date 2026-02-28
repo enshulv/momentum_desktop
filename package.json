@@ -56,9 +56,12 @@
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/github": "^11.0.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/ui": "^4.0.18",
     "autoprefixer": "^10.4.18",
     "concurrently": "^9.2.0",
     "conventional-changelog-conventionalcommits": "^9.1.0",
@@ -70,6 +73,7 @@
     "eslint-plugin-react-refresh": "^0.4.11",
     "globals": "^15.9.0",
     "husky": "^9.1.7",
+    "jsdom": "^28.1.0",
     "postcss": "^8.4.35",
     "rimraf": "^6.0.1",
     "rollup-plugin-visualizer": "^6.0.3",
@@ -80,6 +84,7 @@
     "update-electron-app": "^3.1.1",
     "vite": "^7.1.2",
     "vite-bundle-analyzer": "^0.11.0",
+    "vitest": "^4.0.18",
     "wait-on": "^8.0.4"
   }
 }

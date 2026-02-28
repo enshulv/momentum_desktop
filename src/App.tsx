@@ -8,11 +8,16 @@ import { FocusMode } from './components/FocusMode';
 import { ChainDetail } from './components/ChainDetail';
 import { GroupView } from './components/GroupView';
 import { AuxiliaryJudgment } from './components/AuxiliaryJudgment';
-import WindowControls from './components/WindowControls'; // 添加这一行导入
+import WindowControls from './components/WindowControls';
+import { UpdateAnnouncementModal } from './components/UpdateAnnouncementModal';
 import { DialogProvider, useDialog } from './components/DialogManager';
 import { storage as localStorageUtils } from './utils/storage';
 import { UserPreferences, userPreferences } from './utils/userPreferences';
-
+import { AppContextMenu } from './components/AppContextMenu';
+import OperationHistoryPanel from './components/OperationHistoryPanel';
+import { useUndoRedo } from './hooks/useUndoRedo';
+import { operationHistoryManager } from './utils/operationHistory';
+import { Operation } from './types/undoRedo';
 
 import { isSupabaseConfigured } from './lib/supabase';
 import { isSessionExpired } from './utils/time';
@@ -36,6 +41,14 @@ import { UltimateFix } from './utils/ultimateFix';
 
 function AppContent() {
   const dialog = useDialog();
+  const VERSION_SEEN_KEY = 'momentum_seen_app_version';
+  
+  // ========== 所有 hooks 必须放在条件返回之前 ==========
+  
+  // 画中画模式状态
+  const [isMiniMode, setIsMiniMode] = useState(false);
+  
+  // 主应用状态
   const [state, setState] = useState<AppState>({
     chains: [],
     scheduledSessions: [],
@@ -55,8 +68,233 @@ function AppContent() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(true);
 
+  // 操作历史状态
+  const [historyState, setHistoryState] = useState({
+    canUndo: false,
+    canRedo: false,
+  });
+  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
+  const [showUpdateAnnouncement, setShowUpdateAnnouncement] = useState(false);
+
+  // 更新操作历史状态
+  const updateHistoryState = () => {
+    setHistoryState({
+      canUndo: operationHistoryManager.canUndo(),
+      canRedo: operationHistoryManager.canRedo(),
+    });
+  };
+
+  // 记录链条操作历史
+  const recordChainOperation = (
+    type: Operation['type'],
+    previousState: unknown,
+    nextState: unknown,
+    entityId: string,
+    description: string
+  ) => {
+    const operation: Operation = {
+      id: crypto.randomUUID(),
+      type,
+      timestamp: new Date(),
+      description,
+      previousState,
+      nextState,
+      entityIds: [entityId],
+    };
+    operationHistoryManager.addOperation(operation);
+    updateHistoryState();
+  };
+
+  // 处理撤销
+  const handleUndo = () => {
+    const operation = operationHistoryManager.undo();
+    if (!operation) return;
+
+    // 根据操作类型执行撤销逻辑
+    switch (operation.type) {
+      case 'CREATE_CHAIN':
+        // 撤销创建：删除创建的链条
+        if (operation.entityIds[0]) {
+          const updatedChains = state.chains.filter(c => c.id !== operation.entityIds[0]);
+          safelySaveChains(updatedChains);
+          setState(prev => ({ ...prev, chains: updatedChains }));
+        }
+        break;
+      case 'UPDATE_CHAIN':
+        // 撤销更新：恢复到之前的状态
+        if (operation.previousState) {
+          const prevChain = operation.previousState as Chain;
+          const updatedChains = state.chains.map(c => 
+            c.id === prevChain.id ? prevChain : c
+          );
+          safelySaveChains(updatedChains);
+          setState(prev => ({ ...prev, chains: updatedChains }));
+        }
+        break;
+      case 'DELETE_CHAIN':
+        // 撤销删除：恢复被删除的链条
+        if (operation.entityIds[0]) {
+          const deletedId = operation.entityIds[0];
+          storage.restoreChain(deletedId).then(async () => {
+            const refreshedActiveChains = await storage.getActiveChains();
+            setState(prev => ({ ...prev, chains: refreshedActiveChains }));
+          }).catch((error: unknown) => {
+            console.error('撤销删除失败:', error);
+          });
+        }
+        break;
+      case 'RESTORE_CHAIN':
+        // 撤销恢复：从活跃链条中移除
+        if (operation.entityIds[0]) {
+          const restoredId = operation.entityIds[0];
+          storage.softDeleteChain(restoredId).then(async () => {
+            const refreshedActiveChains = await storage.getActiveChains();
+            setState(prev => ({ ...prev, chains: refreshedActiveChains }));
+          }).catch((error: unknown) => {
+            console.error('撤销恢复失败:', error);
+          });
+        }
+        break;
+      case 'UPDATE_RSIP_NODE':
+        // 撤销节点变更：恢复到之前的 RSIP 节点集合
+        if (operation.previousState) {
+          const prevNodes = operation.previousState as RSIPNode[];
+          setState(prev => ({ ...prev, rsipNodes: prevNodes }));
+          storage.saveRSIPNodes(prevNodes).catch((error: unknown) => {
+            console.error('撤销 RSIP 节点失败:', error);
+          });
+        }
+        break;
+    }
+    updateHistoryState();
+  };
+
+  // 处理重做
+  const handleRedo = () => {
+    const operation = operationHistoryManager.redo();
+    if (!operation) return;
+
+    // 根据操作类型执行重做逻辑
+    switch (operation.type) {
+      case 'CREATE_CHAIN':
+        // 重做创建：重新添加链条
+        if (operation.nextState) {
+          const newChain = operation.nextState as Chain;
+          const updatedChains = [...state.chains, newChain];
+          safelySaveChains(updatedChains);
+          setState(prev => ({ ...prev, chains: updatedChains }));
+        }
+        break;
+      case 'UPDATE_CHAIN':
+        // 重做更新：重新应用更新
+        if (operation.nextState) {
+          const updatedChain = operation.nextState as Chain;
+          const updatedChains = state.chains.map(c => 
+            c.id === updatedChain.id ? updatedChain : c
+          );
+          safelySaveChains(updatedChains);
+          setState(prev => ({ ...prev, chains: updatedChains }));
+        }
+        break;
+      case 'DELETE_CHAIN':
+        // 重做删除：重新删除链条
+        if (operation.entityIds[0]) {
+          const deleteId = operation.entityIds[0];
+          storage.softDeleteChain(deleteId).then(async () => {
+            const refreshedActiveChains = await storage.getActiveChains();
+            setState(prev => ({ ...prev, chains: refreshedActiveChains }));
+          }).catch((error: unknown) => {
+            console.error('重做删除失败:', error);
+          });
+        }
+        break;
+      case 'RESTORE_CHAIN':
+        // 重做恢复：重新添加链条
+        if (operation.entityIds[0]) {
+          const restoreId = operation.entityIds[0];
+          storage.restoreChain(restoreId).then(async () => {
+            const refreshedActiveChains = await storage.getActiveChains();
+            setState(prev => ({ ...prev, chains: refreshedActiveChains }));
+          }).catch((error: unknown) => {
+            console.error('重做恢复失败:', error);
+          });
+        }
+        break;
+      case 'UPDATE_RSIP_NODE':
+        // 重做节点变更：应用新的 RSIP 节点集合
+        if (operation.nextState) {
+          const nextNodes = operation.nextState as RSIPNode[];
+          setState(prev => ({ ...prev, rsipNodes: nextNodes }));
+          storage.saveRSIPNodes(nextNodes).catch((error: unknown) => {
+            console.error('重做 RSIP 节点失败:', error);
+          });
+        }
+        break;
+    }
+    updateHistoryState();
+  };
+
+  // 使用 useUndoRedo hook（提供键盘快捷键和按钮调用）
+  const { undo, redo } = useUndoRedo(handleUndo, handleRedo);
+
   // Use data storage manager instead of direct storage selection
   const [storage, setStorage] = useState(localStorageUtils);
+
+  useEffect(() => {
+    updateHistoryState();
+  }, []);
+
+  useEffect(() => {
+    const onHistoryShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'h') {
+        event.preventDefault();
+        setIsHistoryPanelOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onHistoryShortcut);
+    return () => window.removeEventListener('keydown', onHistoryShortcut);
+  }, []);
+
+  useEffect(() => {
+    const checkVersionAnnouncement = async () => {
+      try {
+        let currentVersion = '';
+        if (window.electronAPI?.app?.getVersion) {
+          currentVersion = await window.electronAPI.app.getVersion();
+        }
+
+        if (!currentVersion) return;
+
+        setAppVersion(currentVersion);
+        const seenVersion = localStorage.getItem(VERSION_SEEN_KEY);
+        if (seenVersion !== currentVersion) {
+          setShowUpdateAnnouncement(true);
+        }
+      } catch (error) {
+        console.error('检查更新说明弹窗失败:', error);
+      }
+    };
+
+    checkVersionAnnouncement();
+  }, []);
+
+  const getUpdateNotes = (): string[] => {
+    // 当前版本未配置专门文案时，使用通用更新说明
+    return [
+      '小窗模式与置顶流程稳定性优化，专注流程切换更一致。',
+      '新增全局右键菜单，集成撤回/前进/操作历史，并提供快捷键提示。',
+      'RSIP 节点编辑已接入主流程，支持规则与计时配置直接修改。',
+      '修复“删除后撤回但回收箱仍残留”的问题。'
+    ];
+  };
+
+  const handleCloseUpdateAnnouncement = () => {
+    if (appVersion) {
+      localStorage.setItem(VERSION_SEEN_KEY, appVersion);
+    }
+    setShowUpdateAnnouncement(false);
+  };
   
   useEffect(() => {
     const initializeApp = async () => {
@@ -185,6 +423,8 @@ function AppContent() {
               onInterrupt={handleInterruptSession}
               onPause={handlePauseSession}
               onResume={handleResumeSession}
+              isMiniMode={isMiniMode}
+              onMiniModeChange={setIsMiniMode}
             />
             {showAuxiliaryJudgment && (
               <AuxiliaryJudgment
@@ -273,19 +513,33 @@ function AppContent() {
             meta={state.rsipMeta}
             onBack={handleBackToDashboard}
             onSaveNodes={async (nodes) => {
+              // 记录操作历史（如果节点发生变化）
+              const hasChanges = JSON.stringify(nodes) !== JSON.stringify(state.rsipNodes);
+              if (hasChanges) {
+                recordChainOperation(
+                  'UPDATE_RSIP_NODE',
+                  state.rsipNodes,
+                  nodes,
+                  'rsip_nodes',
+                  '更新RSIP节点'
+                );
+              }
+              
               // 立即更新UI状态，避免阻塞
               setState(prev => ({ ...prev, rsipNodes: nodes }));
               // 异步保存到存储，不阻塞UI
-              storage.saveRSIPNodes(nodes).catch(error => {
+              try {
+                await storage.saveRSIPNodes(nodes);
+              } catch (error) {
                 console.error('保存RSIP节点失败:', error);
                 // 如果保存失败，可以考虑回滚状态或显示错误提示
-              });
+              }
             }}
-            onSaveMeta={async (meta) => {
+            onSaveMeta={(meta) => {
               // 立即更新UI状态，避免阻塞
               setState(prev => ({ ...prev, rsipMeta: meta }));
               // 异步保存到存储，不阻塞UI
-              storage.saveRSIPMeta(meta).catch(error => {
+              storage.saveRSIPMeta(meta).catch((error: unknown) => {
                 console.error('保存RSIP元数据失败:', error);
               });
             }}
@@ -530,7 +784,7 @@ function AppContent() {
   };
 
   // 辅助函数：安全保存链条数据，保持回收箱完整
-  const safelySaveChains = async (updatedActiveChains: Chain[]) => {
+  const safelySaveChains = async (updatedActiveChains: Chain[]): Promise<void> => {
     try {
       console.log('开始安全保存，活跃链数量:', updatedActiveChains.length);
       
@@ -570,7 +824,8 @@ function AppContent() {
       const allExistingChains = await storage.getChains();
       console.log('获取到所有现有链条（包括已删除的）:', allExistingChains.length);
       
-      const deletedChains = allExistingChains.filter(chain => chain.deletedAt != null);
+      const activeIds = new Set(cleanActiveChains.map(chain => chain.id));
+      const deletedChains = allExistingChains.filter(chain => chain.deletedAt != null && !activeIds.has(chain.id));
       
       // 合并活跃链条和已删除链条
       const allUpdatedChains = [...cleanActiveChains, ...deletedChains];
@@ -650,19 +905,41 @@ function AppContent() {
         parentId: chain.parentId || undefined,
       }));
       
-      console.log('准备安全保存到存储（包含回收箱数据）...');
-      // 使用安全保存方法
-      await safelySaveChains(updatedActiveChains);
-      console.log('数据保存成功（包含回收箱数据），更新UI状态');
-      
-      // Only update state after successful save (only with active chains)
-      setState(prev => ({
-        ...prev,
-        chains: updatedActiveChains,
-        currentView: 'dashboard',
-        editingChain: null,
-      }));
-      console.log('UI状态更新完成');
+        console.log('准备安全保存到存储（包含回收箱数据）...');
+        // 使用安全保存方法
+        await safelySaveChains(updatedActiveChains);
+        console.log('数据保存成功（包含回收箱数据），更新UI状态');
+        
+        // 记录操作历史
+        if (state.editingChain) {
+          // 编辑操作：记录原始状态和新状态
+          recordChainOperation(
+            'UPDATE_CHAIN',
+            state.editingChain,
+            updatedActiveChains.find(c => c.id === state.editingChain!.id) || null,
+            state.editingChain.id,
+            `更新链条: ${state.editingChain.name}`
+          );
+        } else {
+          // 创建操作：记录新创建的链条
+          const newChain = updatedActiveChains[updatedActiveChains.length - 1];
+          recordChainOperation(
+            'CREATE_CHAIN',
+            null,
+            newChain,
+            newChain.id,
+            `创建链条: ${newChain.name}`
+          );
+        }
+        
+        // Only update state after successful save (only with active chains)
+        setState(prev => ({
+          ...prev,
+          chains: updatedActiveChains,
+          currentView: 'dashboard',
+          editingChain: null,
+        }));
+        console.log('UI状态更新完成');
     } catch (error) {
       console.error('Failed to save chain:', error);
       // 提供更详细的错误信息
@@ -878,10 +1155,7 @@ function AppContent() {
 
       const updatedHistory = [...prev.completionHistory, completionRecord];
       
-      // 使用安全保存方法保持回收箱数据完整
-      safelySaveChains(updatedChains).catch(error => {
-        console.error('完成任务时保存链条数据失败:', error);
-      });
+      // 保存数据到 storage
       storage.saveActiveSession(null);
       storage.saveCompletionHistory(updatedHistory);
       
@@ -897,6 +1171,11 @@ function AppContent() {
         completionHistory: updatedHistory,
         currentView: 'dashboard',
       };
+    });
+    
+    // 异步保存链条数据（在 setState 外部执行）
+    safelySaveChains(state.chains).catch((error: unknown) => {
+      console.error('完成任务时保存链条数据失败:', error);
     });
   };
 
@@ -935,10 +1214,7 @@ function AppContent() {
 
       const updatedHistory = [...prev.completionHistory, completionRecord];
       
-      // 使用安全保存方法保持回收箱数据完整
-      safelySaveChains(updatedChains).catch(error => {
-        console.error('中断任务时保存链条数据失败:', error);
-      });
+      // 保存数据到 storage
       storage.saveActiveSession(null);
       storage.saveCompletionHistory(updatedHistory);
 
@@ -949,6 +1225,11 @@ function AppContent() {
         completionHistory: updatedHistory,
         currentView: 'dashboard',
       };
+    });
+    
+    // 异步保存链条数据（在 setState 外部执行）
+    safelySaveChains(state.chains).catch((error: unknown) => {
+      console.error('中断任务时保存链条数据失败:', error);
     });
   };
 
@@ -1012,10 +1293,6 @@ function AppContent() {
           : chain
       );
       
-      // 使用安全保存方法保持回收箱数据完整
-      safelySaveChains(updatedChains).catch(error => {
-        console.error('辅助判断失败时保存链条数据失败:', error);
-      });
       storage.saveScheduledSessions(updatedScheduledSessions);
       
       return {
@@ -1023,6 +1300,19 @@ function AppContent() {
         chains: updatedChains,
         scheduledSessions: updatedScheduledSessions,
       };
+    });
+    
+    // 异步保存链条数据
+    safelySaveChains(state.chains.map(chain =>
+      chain.id === chainId
+        ? {
+            ...chain,
+            auxiliaryStreak: 0,
+            auxiliaryFailures: chain.auxiliaryFailures + 1
+          }
+        : chain
+    )).catch(error => {
+      console.error('辅助判断失败时保存链条数据失败:', error);
     });
     
     setShowAuxiliaryJudgment(null);
@@ -1047,10 +1337,6 @@ function AppContent() {
           : chain
       );
       
-      // 使用安全保存方法保持回收箱数据完整
-      safelySaveChains(updatedChains).catch(error => {
-        console.error('辅助判断允许时保存链条数据失败:', error);
-      });
       storage.saveScheduledSessions(updatedScheduledSessions);
       
       return {
@@ -1058,6 +1344,18 @@ function AppContent() {
         chains: updatedChains,
         scheduledSessions: updatedScheduledSessions,
       };
+    });
+    
+    // 异步保存链条数据
+    safelySaveChains(state.chains.map(chain =>
+      chain.id === chainId
+        ? {
+            ...chain,
+            auxiliaryExceptions: [...(chain.auxiliaryExceptions || []), exceptionRule]
+          }
+        : chain
+    )).catch(error => {
+      console.error('辅助判断允许时保存链条数据失败:', error);
     });
     
     setShowAuxiliaryJudgment(null);
@@ -1093,6 +1391,9 @@ function AppContent() {
 
   const handleDeleteChain = async (chainId: string) => {
     try {
+      // 获取要删除的链条的当前状态（用于操作历史）
+      const chainToDelete = state.chains.find(c => c.id === chainId);
+      
       // Use soft deletion instead of permanent deletion
       await storage.softDeleteChain(chainId);
       
@@ -1130,6 +1431,17 @@ function AppContent() {
       });
       
       console.log(`链条 ${chainId} 已移动到回收箱`);
+      
+      // 记录删除操作历史
+      if (chainToDelete) {
+        recordChainOperation(
+          'DELETE_CHAIN',
+          chainToDelete,
+          null,
+          chainId,
+          `删除链条: ${chainToDelete.name}`
+        );
+      }
     } catch (error) {
       console.error('删除链条失败:', error);
       dialog.showAlert({
@@ -1144,6 +1456,10 @@ function AppContent() {
     try {
       console.log('恢复链条:', chainIds);
       
+      // 获取要恢复的链条信息（用于操作历史）
+      const allChains = await storage.getChains();
+      const chainsToRestore = allChains.filter(c => chainIds.includes(c.id) && c.deletedAt);
+      
       // 批量恢复链条
       for (const chainId of chainIds) {
         await storage.restoreChain(chainId);
@@ -1157,6 +1473,17 @@ function AppContent() {
       }));
       
       console.log(`成功恢复 ${chainIds.length} 条链条`);
+      
+      // 记录恢复操作历史
+      chainsToRestore.forEach(chain => {
+        recordChainOperation(
+          'RESTORE_CHAIN',
+          null,
+          chain,
+          chain.id,
+          `恢复链条: ${chain.name}`
+        );
+      });
     } catch (error) {
       console.error('恢复链条失败:', error);
       dialog.showAlert({
@@ -1369,9 +1696,30 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen pt-10 bg-[#FDFDFD] dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
-      <WindowControls />
+    <div className={`min-h-screen ${!isMiniMode ? 'pt-10' : ''} bg-[#FDFDFD] dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-800 dark:to-slate-900`}>
+      {!isMiniMode && <WindowControls />}
       {renderContent()}
+      <AppContextMenu
+        canUndo={historyState.canUndo}
+        canRedo={historyState.canRedo}
+        onUndo={undo}
+        onRedo={redo}
+        onOpenHistory={() => setIsHistoryPanelOpen(true)}
+      />
+      <OperationHistoryPanel
+        isOpen={isHistoryPanelOpen}
+        onClose={() => {
+          setIsHistoryPanelOpen(false);
+          updateHistoryState();
+        }}
+        onHistoryChanged={updateHistoryState}
+      />
+      <UpdateAnnouncementModal
+        isOpen={showUpdateAnnouncement}
+        version={appVersion}
+        notes={getUpdateNotes()}
+        onClose={handleCloseUpdateAnnouncement}
+      />
     </div>
   );
 }

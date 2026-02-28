@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RSIPNode, RSIPTreeNode, RSIPMeta } from '../types';
 import { buildRSIPTree, deleteNodeAndDescendants } from '../utils/rsipTree';
-import { Plus, Trash2, ArrowLeft, Clock, AlertCircle, AlarmClock } from 'lucide-react';
+import { Plus, Trash2, ArrowLeft, Clock, AlertCircle, AlarmClock, Pencil } from 'lucide-react';
 import { ConfirmationDialog } from './ConfirmationDialog';
+import { RSIPNodeEditDialog } from './RSIPNodeEditDialog';
 
 interface RSIPViewProps {
   nodes: RSIPNode[];
@@ -42,6 +43,7 @@ export const RSIPView: React.FC<RSIPViewProps> = ({ nodes, meta, onBack, onSaveN
     nodeTitle: string;
     deletedCount: number;
   } | null>(null);
+  const [editingNode, setEditingNode] = useState<RSIPNode | null>(null);
 
   const canAddToday = useMemo(() => {
     if (meta.allowMultiplePerDay) return true;
@@ -170,6 +172,20 @@ export const RSIPView: React.FC<RSIPViewProps> = ({ nodes, meta, onBack, onSaveN
     setRule('');
     setSelectedParentId(undefined);
   }, [showDeleteConfirm, nodes, onSaveNodes]);
+
+  const handleOpenEdit = useCallback((node: RSIPNode) => {
+    setEditingNode(node);
+  }, []);
+
+  const handleSaveEdit = useCallback((updatedNode: RSIPNode) => {
+    const updatedNodes = nodes.map(node =>
+      node.id === updatedNode.id
+        ? { ...updatedNode, sortOrder: node.sortOrder, createdAt: node.createdAt, parentId: node.parentId }
+        : node
+    );
+    onSaveNodes(updatedNodes);
+    setEditingNode(null);
+  }, [nodes, onSaveNodes]);
 
   // 添加定时相关状态
   const [scheduledTimers, setScheduledTimers] = useState<Record<string, { scheduledAt: Date; hour: number; minute: number }>>({}); // nodeId -> scheduled info
@@ -695,15 +711,24 @@ export const RSIPView: React.FC<RSIPViewProps> = ({ nodes, meta, onBack, onSaveN
               </div>
             )}
           </div>
-          <button
-            onClick={() => {
-              handleFailure(node.id).catch(console.error);
-            }}
-            className="p-2 text-red-500 hover:text-red-600 dark:hover:text-red-400 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20"
-            title="判定失败（删除此节点及其所有子节点）"
-          >
-            <Trash2 size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => handleOpenEdit(node)}
+              className="p-2 text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 rounded-xl hover:bg-blue-50 dark:hover:bg-blue-900/20"
+              title="编辑节点"
+            >
+              <Pencil size={16} />
+            </button>
+            <button
+              onClick={() => {
+                handleFailure(node.id).catch(console.error);
+              }}
+              className="p-2 text-red-500 hover:text-red-600 dark:hover:text-red-400 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20"
+              title="判定失败（删除此节点及其所有子节点）"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
         </div>
 
         {node.children.length > 0 && (
@@ -725,6 +750,7 @@ export const RSIPView: React.FC<RSIPViewProps> = ({ nodes, meta, onBack, onSaveN
     now,
     handleScheduleTimer,
     handleFailure,
+    handleOpenEdit,
     tempScheduleTime,
     setActiveTimers,
     setScheduledTimers,
@@ -939,6 +965,12 @@ export const RSIPView: React.FC<RSIPViewProps> = ({ nodes, meta, onBack, onSaveN
         confirmButtonClass="bg-red-500 hover:bg-red-600"
         onConfirm={handleConfirmDelete}
         onCancel={() => setShowDeleteConfirm(null)}
+      />
+      <RSIPNodeEditDialog
+        isOpen={!!editingNode}
+        node={editingNode}
+        onClose={() => setEditingNode(null)}
+        onSave={handleSaveEdit}
       />
     </div>
   );
