@@ -73,3 +73,8 @@ Desktop.ini
 
 # 构建缓存
 .electron-builder-cache/
+# Local planning/intermediate docs
+AGENTS.md
+QUICK_START.md
+TESTS_SUMMARY.md
+plan/
