@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/enshulv/momentum_desktop/compare/v1.2.6...v1.3.0) (2026-02-28)
+
+### 🚀 新功能
+
+* ship production-ready update UX and undo/rsip stability fixes ([55dd48a](https://github.com/enshulv/momentum_desktop/commit/55dd48aab387429e44a64a328879e8002337eb4e))
+
 ## [1.2.6](https://github.com/enshulv/momentum_desktop/compare/v1.2.5...v1.2.6) (2025-09-11)
 
 ### 🐛 修复
